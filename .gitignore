@@ -1,0 +1,19 @@
+# Secrets - never commit these
+.env
+
+# Runtime state files (generated at runtime)
+active_messages.json
+banned_games.json
+target_place.json
+
+# Stock backups (local only)
+.stock_backups/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Misc
+*.zip
+*.log
