@@ -246,13 +246,12 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
 # Linkvertise
 # ─────────────────────────────────────────────
 def generate_linkvertise_url(place_id: str) -> str:
-    """Generate Linkvertise URL or return direct Roblox link based on config."""
+    """Generate Linkvertise URL or return direct Roblox launch link based on config."""
     if not USE_LINKVERTISE or not LINKVERTISE_USER_ID:
-        # Use direct Roblox link
-        return f"https://www.roblox.com/games/{place_id}"
+        return f"https://www.roblox.com/games/start?placeId={place_id}"
 
     # Use Linkvertise
-    roblox_url = f"https://www.roblox.com/games/{place_id}"
+    roblox_url = f"https://www.roblox.com/games/start?placeId={place_id}"
     encoded_url = base64.b64encode(roblox_url.encode()).decode()
     return f"https://linkvertise.com/{LINKVERTISE_USER_ID}/game/dynamic?r={encoded_url}"
 
@@ -315,7 +314,7 @@ class GameLinkView(discord.ui.View):
         has_role = any(role.id in INSTANT_PLAY_ROLE_IDS for role in member.roles)
 
         if has_role:
-            direct_link = f"https://www.roblox.com/games/{self.place_id}"
+            direct_link = f"https://www.roblox.com/games/start?placeId={self.place_id}"
             await interaction.response.send_message(
                 content=f"🚀 **Instant Access!**\n<{direct_link}>",
                 ephemeral=True
