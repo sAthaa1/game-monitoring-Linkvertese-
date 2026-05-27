@@ -42,6 +42,9 @@ last_rendered_data: dict[str, str] = {}
 _session: aiohttp.ClientSession | None = None
 banned_games: set[str] = set()
 
+# Cache universe IDs so we don't re-fetch them every loop tick
+_universe_id_cache: dict[str, int] = {}
+
 COLORS = {
     "online": 0x000000,
     "offline": 0x000000,
@@ -131,18 +134,15 @@ def format_uptime(start: datetime) -> str:
 async def fetch_place_id_from_file() -> str | None:
     try:
         if not os.path.exists(TARGET_PLACE_FILE):
-            print(f"DEBUG: {TARGET_PLACE_FILE} does not exist")
             return None
         with open(TARGET_PLACE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         place_id = data.get("targetPlaceId")
         if place_id is None or str(place_id).strip() in ("0", "", "null"):
-            print(f"DEBUG: Invalid place ID in file: {place_id}")
             return None
-        print(f"DEBUG: Loaded place ID from file: {place_id}")
         return str(place_id).strip()
     except Exception as e:
-        print(f"DEBUG: Error reading {TARGET_PLACE_FILE}: {e}")
+        print(f"WARNING: Error reading {TARGET_PLACE_FILE}: {e}")
         return None
 
 
@@ -157,14 +157,20 @@ async def get_session():
 # Roblox API (Public, no auth needed)
 # ─────────────────────────────────────────────
 async def get_universe_id_from_place(session: aiohttp.ClientSession, place_id: str) -> int | None:
+    # Return cached value if available
+    if place_id in _universe_id_cache:
+        return _universe_id_cache[place_id]
     try:
         url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
         async with session.get(url) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                return data.get("universeId")
+                uid = data.get("universeId")
+                if uid:
+                    _universe_id_cache[place_id] = uid
+                return uid
     except Exception as e:
-        print(f"WARNING: [{place_id}] Error get Universe ID: {e}")
+        print(f"WARNING: [{place_id}] Error getting Universe ID: {e}")
     return None
 
 
@@ -188,7 +194,6 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
     try:
         universe_id = await get_universe_id_from_place(session, place_id)
         if universe_id is None:
-            print(f"WARNING: [{place_id}] Cannot get Universe ID (network issue)")
             return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}
 
         url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
@@ -202,7 +207,7 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
 
                     if not g.get("isPlayable", True):
                         reason = g.get("reasonProhibited", "Unknown")
-                        print(f"WARNING: [{place_id}] {name} - {reason} (may be temporary)")
+                        print(f"WARNING: [{place_id}] {name} - {reason}")
                         return {"name": name, "status": "offline", "players": 0, "servers": 0}
 
                     api_players = g.get("playing", 0)
@@ -210,8 +215,6 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
                     players = live_players if live_players > 0 else api_players
 
                     display_name = GAME_DISPLAY_NAME if GAME_DISPLAY_NAME else name
-                    print(f"OK: [{place_id}] {display_name} -- {players} players, {running_servers} servers")
-
                     return {
                         "name": display_name,
                         "status": "online",
@@ -350,14 +353,13 @@ async def update_status_message(channels: list, game_id: str, data: dict):
 # ─────────────────────────────────────────────
 # Monitor Loop
 # ─────────────────────────────────────────────
-@tasks.loop(seconds=10)
+@tasks.loop(seconds=30)
 async def monitor_loop():
     global last_known_place_id
 
     channels = [bot.get_channel(cid) for cid in MONITOR_CHANNEL_IDS]
     channels = [c for c in channels if c is not None]
     if not channels:
-        print(f"WARNING: No valid channels found. IDs: {MONITOR_CHANNEL_IDS}")
         return
 
     session = await get_session()
@@ -386,11 +388,12 @@ async def monitor_loop():
             del monitored_games[old_id]
             uptime_start.pop(old_id, None)
             last_rendered_data.pop(old_id, None)
-            print(f"CLEANUP: Removed old game {old_id}")
+            _universe_id_cache.pop(old_id, None)
+            print(f"SWITCH: {old_id} -> {new_place_id}")
 
         # Register new game (skip if previously banned)
         if new_place_id in banned_games:
-            print(f"WARNING: New place ID {new_place_id} was previously banned, skipping registration")
+            print(f"WARNING: Place {new_place_id} was previously banned, skipping")
             last_known_place_id = None
         else:
             monitored_games[new_place_id] = {
@@ -399,13 +402,10 @@ async def monitor_loop():
                 "players": 0,
             }
             last_known_place_id = new_place_id
-            print(f"SYNC: Place ID changed: {old_id} -> {new_place_id}")
 
     # Fetch and update
     for game_id in list(monitored_games.keys()):
-        # Skip if this game was previously banned
         if game_id in banned_games:
-            print(f"SKIP: {game_id} was previously banned, skipping...")
             continue
 
         data = await fetch_roblox_status(session, game_id)
@@ -413,19 +413,16 @@ async def monitor_loop():
 
         # Skip unknown status (network errors) - don't treat as ban
         if curr_status == "unknown":
-            print(f"SKIP: [{game_id}] Network error, skipping this check")
             continue
 
-        # Uptime tracking - only set when status is online
+        # Uptime tracking
         if curr_status == "online":
             if game_id not in uptime_start:
                 uptime_start[game_id] = datetime.now(timezone.utc)
-                print(f"UPTIME: Started tracking {game_id}")
+                print(f"ONLINE: {game_id} | Players: {data.get('players', 0)}")
         else:
-            # Clear uptime for non-online status
             if game_id in uptime_start:
                 uptime_start.pop(game_id, None)
-                print(f"UPTIME: Cleared for {game_id} (status: {curr_status})")
 
         monitored_games[game_id].update(data)
 
@@ -433,7 +430,7 @@ async def monitor_loop():
         uptime_ticks = 0
         if game_id in uptime_start:
             delta = datetime.now(timezone.utc) - uptime_start[game_id]
-            uptime_ticks = int(delta.total_seconds() // 20)
+            uptime_ticks = int(delta.total_seconds() // 60)  # tick every minute
 
         data_signature = f"{curr_status}|{data.get('players', 0)}|{data.get('servers', 0)}|{uptime_ticks}"
 
@@ -442,9 +439,6 @@ async def monitor_loop():
             await update_status_message(channels, game_id, monitored_games[game_id])
             last_rendered_data[game_id] = data_signature
             print(f"UPDATE: [{game_id}] {curr_status} | Players: {data.get('players', 0)}")
-        else:
-            # Data hasn't changed, don't spam Discord
-            pass
 
         await asyncio.sleep(0.5)
 
@@ -608,15 +602,9 @@ async def on_command_error(ctx, error):
 async def on_ready():
     print(f"OK: Bot online as {bot.user} (ID: {bot.user.id})")
     print(f"Channels: {MONITOR_CHANNEL_IDS} | File: {TARGET_PLACE_FILE}")
-    print(f"DEBUG: Checking channels...")
 
-    channels = [bot.get_channel(cid) for cid in MONITOR_CHANNEL_IDS]
-    for i, cid in enumerate(MONITOR_CHANNEL_IDS):
-        ch = bot.get_channel(cid)
-        print(f"DEBUG: Channel {cid} = {ch}")
-
-    channels = [c for c in channels if c is not None]
-    print(f"DEBUG: Valid channels: {len(channels)}")
+    valid_channels = [bot.get_channel(cid) for cid in MONITOR_CHANNEL_IDS if bot.get_channel(cid)]
+    print(f"Valid channels: {len(valid_channels)}/{len(MONITOR_CHANNEL_IDS)}")
 
     # Load banned games from previous sessions
     load_banned_games()
@@ -638,8 +626,8 @@ async def on_ready():
         status_message_ids.clear()
         save_active_messages()
 
-    print(f"DEBUG: Starting monitor_loop...")
-    monitor_loop.start()
+    if not monitor_loop.is_running():
+        monitor_loop.start()
 
 
 # Cleanup on shutdown
@@ -663,6 +651,21 @@ async def _cleanup_close():
 
 
 bot.close = _cleanup_close
+
+
+# ─────────────────────────────────────────────
+# Disconnect / Resume handlers
+# ─────────────────────────────────────────────
+@bot.event
+async def on_disconnect():
+    print("WARNING: Bot disconnected from Discord. Attempting to reconnect...")
+
+
+@bot.event
+async def on_resumed():
+    print("OK: Bot reconnected and session resumed.")
+    if not monitor_loop.is_running():
+        monitor_loop.start()
 
 
 # ─────────────────────────────────────────────
@@ -701,4 +704,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "cleanup":
         asyncio.run(run_cleanup())
     else:
-        bot.run(TOKEN)
+        bot.run(TOKEN, reconnect=True)

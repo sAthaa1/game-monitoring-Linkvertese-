@@ -257,7 +257,7 @@ async def run_orchestrator():
         bot_ready_event.set()
 
     # Start the bot in the background
-    bot_task = asyncio.create_task(monitoring.bot.start(monitoring.TOKEN))
+    bot_task = asyncio.create_task(monitoring.bot.start(monitoring.TOKEN, reconnect=True))
     print("Starting monitoring bot...")
 
     # Wait for on_ready to fire (with a 60s timeout)
