@@ -47,7 +47,7 @@ def set_active_place_id(place_id: str) -> bool:
         return True
     except OSError as e:
         if e.errno == 28:
-            print(f"SKIP: Cannot write place ID. Removing from stock...")
+            print(f"SKIP: Disk full — cannot write place ID {place_id}.")
             return False
         print(f"FAILED: Failed to write {TARGET_PLACE_FILE}: {e}")
         return False
@@ -56,8 +56,11 @@ def set_active_place_id(place_id: str) -> bool:
         return False
 
 
-def remove_from_stock(place_id: str):
-    """Remove a specific place ID from stock (only that one, not all)."""
+def remove_from_stock(place_id: str) -> list[str]:
+    """
+    Remove a specific place ID from stock.
+    Returns the updated stock list (even if save failed, so caller can continue).
+    """
     from stock_manager import load_stock, save_stock
 
     stock = load_stock()
@@ -67,10 +70,8 @@ def remove_from_stock(place_id: str):
         if success:
             print(f"STOCK: Removed {place_id}. Remaining: {len(stock)} IDs")
         else:
-            print(f"ERROR: Failed to save stock after removing {place_id}")
-            print(f"WARNING: Stock may be corrupted. Run: python stock_manager.py recover")
-    else:
-        print(f"STOCK: {place_id} not found in stock (already removed?)")
+            print(f"WARNING: Could not persist stock removal for {place_id} (disk full?). Continuing in memory.")
+    return stock
 
 
 # ---------------------------------------------
@@ -271,23 +272,29 @@ async def run_orchestrator():
 
     consecutive_failures = 0
     MAX_CONSECUTIVE_FAILURES = 3  # skip after this many network errors in a row
+    # Work from an in-memory list so disk-full errors don't cause infinite loops
+    mem_stock: list[str] = []
 
     while True:
-        stock = load_stock()
+        # Reload from disk only when our in-memory list is empty
+        if not mem_stock:
+            mem_stock = load_stock()
 
-        if not stock:
+        if not mem_stock:
             print("STOCK: Empty. Waiting 60s before rechecking...")
             await asyncio.sleep(60)
             continue
 
-        current_id = stock[0]
-        print(f"\nORCHESTRATOR: Using Place ID {current_id} ({len(stock)} in stock)")
+        current_id = mem_stock[0]
+        print(f"\nORCHESTRATOR: Using Place ID {current_id} ({len(mem_stock)} in stock)")
 
         # Write active place ID so the monitoring bot picks it up
         ok = set_active_place_id(current_id)
         if not ok:
-            print(f"ORCHESTRATOR: Cannot write place ID {current_id}, removing from stock.")
-            remove_from_stock(current_id)
+            # Disk full or write error — skip this ID in memory and wait before retrying
+            print(f"ORCHESTRATOR: Cannot write place ID {current_id}, skipping to next.")
+            mem_stock = remove_from_stock(current_id)
+            await asyncio.sleep(5)
             continue
 
         # Give the monitoring bot time to pick up the new ID and post embed
@@ -295,10 +302,11 @@ async def run_orchestrator():
 
         # Health-check loop for this place ID
         while True:
-            stock = load_stock()
-            if not stock or stock[0] != current_id:
-                # Stock changed externally (e.g. !skip command)
+            # Check if stock changed externally (e.g. !skip command)
+            disk_stock = load_stock()
+            if disk_stock and disk_stock[0] != current_id:
                 print(f"ORCHESTRATOR: Place ID changed externally, re-syncing.")
+                mem_stock = disk_stock
                 break
 
             playable, universe_id = await is_place_openable(current_id)
@@ -325,8 +333,8 @@ async def run_orchestrator():
             # Cleanup Discord embed for this game
             await cleanup_discord_messages()
 
-            # Remove failed ID from stock
-            remove_from_stock(current_id)
+            # Remove failed ID from stock (returns updated list)
+            mem_stock = remove_from_stock(current_id)
 
             # Small delay before picking next ID
             await asyncio.sleep(3)
