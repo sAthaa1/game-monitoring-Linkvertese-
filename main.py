@@ -129,7 +129,7 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                 return False, universe_id
 
             # Step 3: Fallback - public page check
-            public_url = f"https://www.roblox.com/games/{place_id}/"
+            public_url = f"https://www.roblox.com/games/start?placeId={place_id}/"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             try:
                 async with session.get(public_url, headers=headers, allow_redirects=True) as resp:
@@ -304,7 +304,12 @@ async def run_orchestrator():
             # Disk full or write error — skip this ID in memory and wait before retrying
             print(f"ORCHESTRATOR: Cannot write place ID {current_id}, skipping to next.")
             mem_stock = remove_from_stock(current_id, mem_stock)
-            await asyncio.sleep(5)
+            if not mem_stock:
+                print("ORCHESTRATOR: All IDs exhausted due to disk full. Waiting 120s for disk space to free up...")
+                await asyncio.sleep(120)
+                mem_stock = load_stock()  # try reloading after wait
+            else:
+                await asyncio.sleep(5)
             continue
 
         # Give the monitoring bot time to pick up the new ID and post embed
