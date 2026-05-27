@@ -119,7 +119,6 @@ def load_stock() -> list[str]:
             return recover_from_backup()
 
         stock = data.get("stock", [])
-        print(f"Loaded {len(stock)} IDs from stock")
         return stock
 
     except json.JSONDecodeError as e:
@@ -208,8 +207,6 @@ def save_stock(stock_list: list[str]):
             if os.path.exists(STOCK_FILE):
                 os.remove(STOCK_FILE)
             os.rename(temp_file, STOCK_FILE)
-
-            print(f"✅ Stock saved successfully ({len(stock_list)} IDs)")
             return True
 
         except OSError as e:
