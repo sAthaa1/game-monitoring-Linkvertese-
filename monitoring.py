@@ -20,6 +20,7 @@ LINKVERTISE_USER_ID = os.getenv("LINKVERTISE_USER_ID", "")
 GROUP_URL = os.getenv("GROUP_URL", "")
 INSTANT_PLAY_ROLE_IDS_STR = os.getenv("INSTANT_PLAY_ROLE_IDS", os.getenv("INSTANT_PLAY_ROLE_ID", "0"))
 INSTANT_PLAY_ROLE_IDS = [int(rid.strip()) for rid in INSTANT_PLAY_ROLE_IDS_STR.split(",") if rid.strip() and rid.strip().isdigit()]
+ROBLOSECURITY = os.getenv("ROBLOSECURITY", "")
 
 # Feature toggles
 USE_LINKVERTISE = os.getenv("USE_LINKVERTISE", "false").lower() == "true"
@@ -149,7 +150,19 @@ async def fetch_place_id_from_file() -> str | None:
 async def get_session():
     global _session
     if _session is None or _session.closed:
-        _session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        jar = aiohttp.CookieJar()
+        connector = aiohttp.TCPConnector()
+        _session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10),
+            cookie_jar=jar,
+            connector=connector,
+        )
+        # Inject Roblox auth cookie so 17+ games are visible
+        if ROBLOSECURITY:
+            _session.cookie_jar.update_cookies(
+                {".ROBLOSECURITY": ROBLOSECURITY},
+                response_url=aiohttp.client.URL("https://roblox.com"),
+            )
     return _session
 
 

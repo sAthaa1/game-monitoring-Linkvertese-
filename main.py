@@ -78,19 +78,36 @@ def remove_from_stock(place_id: str, mem_stock: list[str] | None = None) -> list
     return stock
 
 
+ROBLOSECURITY = os.getenv("ROBLOSECURITY", "")
+
+def _make_roblox_session() -> aiohttp.ClientSession:
+    """Create an aiohttp session with the Roblox auth cookie injected."""
+    jar = aiohttp.CookieJar()
+    session = aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=PLAYABILITY_CHECK_TIMEOUT),
+        cookie_jar=jar,
+    )
+    if ROBLOSECURITY:
+        session.cookie_jar.update_cookies(
+            {".ROBLOSECURITY": ROBLOSECURITY},
+            response_url=aiohttp.client.URL("https://roblox.com"),
+        )
+    return session
+
+
 # ---------------------------------------------
 # Roblox Public API Checks
 # ---------------------------------------------
 async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
     """
-    Check if a place is playable using public Roblox APIs only.
+    Check if a place is playable using Roblox APIs.
+    Uses auth cookie so 17+ games are correctly detected as playable.
     Returns (is_playable, universe_id).
-    Timeout: 10 seconds total for faster detection.
     """
     universe_id = None
 
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=PLAYABILITY_CHECK_TIMEOUT)) as session:
+        async with _make_roblox_session() as session:
             # Step 1: Place ID -> Universe ID
             url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
             try:
@@ -106,7 +123,7 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                 print(f"WARNING: [{place_id}] Cannot resolve Universe ID")
                 return False, None
 
-            # Step 2: Check via Games API
+            # Step 2: Check via Games API (auth cookie makes 17+ games visible)
             url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
             try:
                 async with session.get(url) as resp:
@@ -116,29 +133,21 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                         if games:
                             g = games[0]
                             is_playable = g.get("isPlayable", True)
+                            reason = g.get("reasonProhibited", "")
 
-                            if is_playable:
-                                print(f"OK: Place {place_id} (Universe {universe_id}) is playable.")
+                            # Treat age-restriction as playable (game is up, just age-gated)
+                            if not is_playable and "Under17" in reason:
+                                print(f"WARNING: [{place_id}] 17+ game detected without valid auth cookie.")
                                 return True, universe_id
 
-                            reason = g.get("reasonProhibited", "Unknown")
+                            if is_playable:
+                                return True, universe_id
+
                             print(f"BANNED: Place {place_id} is NOT playable. Reason: {reason}")
                             return False, universe_id
             except asyncio.TimeoutError:
                 print(f"WARNING: [{place_id}] Timeout checking Games API")
                 return False, universe_id
-
-            # Step 3: Fallback - public page check
-            public_url = f"https://www.roblox.com/games/start?placeId={place_id}/"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            try:
-                async with session.get(public_url, headers=headers, allow_redirects=True) as resp:
-                    if resp.status == 200:
-                        final_url = str(resp.url)
-                        if "roblox.com/games/" in final_url and "/request-error" not in final_url:
-                            return True, universe_id
-            except asyncio.TimeoutError:
-                print(f"WARNING: [{place_id}] Timeout checking public page")
 
             return False, universe_id
 
