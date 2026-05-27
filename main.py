@@ -56,16 +56,20 @@ def set_active_place_id(place_id: str) -> bool:
         return False
 
 
-def remove_from_stock(place_id: str) -> list[str]:
+def remove_from_stock(place_id: str, mem_stock: list[str] | None = None) -> list[str]:
     """
     Remove a specific place ID from stock.
-    Returns the updated stock list (even if save failed, so caller can continue).
+    If mem_stock is provided, removes from that list directly (avoids disk reload).
+    Always attempts to persist to disk, but continues in memory if disk write fails.
+    Returns the updated stock list.
     """
     from stock_manager import load_stock, save_stock
 
-    stock = load_stock()
+    # Use provided in-memory list, or load from disk as fallback
+    stock = mem_stock if mem_stock is not None else load_stock()
+
     if place_id in stock:
-        stock.remove(place_id)
+        stock = [x for x in stock if x != place_id]
         success = save_stock(stock)
         if success:
             print(f"STOCK: Removed {place_id}. Remaining: {len(stock)} IDs")
@@ -274,16 +278,22 @@ async def run_orchestrator():
     MAX_CONSECUTIVE_FAILURES = 3  # skip after this many network errors in a row
     # Work from an in-memory list so disk-full errors don't cause infinite loops
     mem_stock: list[str] = []
+    _disk_reload_attempts = 0
 
     while True:
         # Reload from disk only when our in-memory list is empty
         if not mem_stock:
-            mem_stock = load_stock()
-
-        if not mem_stock:
-            print("STOCK: Empty. Waiting 60s before rechecking...")
-            await asyncio.sleep(60)
-            continue
+            fresh = load_stock()
+            # Only use disk data if it's different from what we already exhausted
+            if fresh:
+                mem_stock = fresh
+                _disk_reload_attempts = 0
+            else:
+                _disk_reload_attempts += 1
+                wait = min(60 * _disk_reload_attempts, 300)
+                print(f"STOCK: Empty. Waiting {wait}s before rechecking...")
+                await asyncio.sleep(wait)
+                continue
 
         current_id = mem_stock[0]
         print(f"\nORCHESTRATOR: Using Place ID {current_id} ({len(mem_stock)} in stock)")
@@ -293,7 +303,7 @@ async def run_orchestrator():
         if not ok:
             # Disk full or write error — skip this ID in memory and wait before retrying
             print(f"ORCHESTRATOR: Cannot write place ID {current_id}, skipping to next.")
-            mem_stock = remove_from_stock(current_id)
+            mem_stock = remove_from_stock(current_id, mem_stock)
             await asyncio.sleep(5)
             continue
 
@@ -334,7 +344,7 @@ async def run_orchestrator():
             await cleanup_discord_messages()
 
             # Remove failed ID from stock (returns updated list)
-            mem_stock = remove_from_stock(current_id)
+            mem_stock = remove_from_stock(current_id, mem_stock)
 
             # Small delay before picking next ID
             await asyncio.sleep(3)
