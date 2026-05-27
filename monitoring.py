@@ -150,19 +150,13 @@ async def fetch_place_id_from_file() -> str | None:
 async def get_session():
     global _session
     if _session is None or _session.closed:
-        jar = aiohttp.CookieJar()
-        connector = aiohttp.TCPConnector()
+        headers = {}
+        if ROBLOSECURITY:
+            headers["Cookie"] = f".ROBLOSECURITY={ROBLOSECURITY}"
         _session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=10),
-            cookie_jar=jar,
-            connector=connector,
+            headers=headers,
         )
-        # Inject Roblox auth cookie so 17+ games are visible
-        if ROBLOSECURITY:
-            _session.cookie_jar.update_cookies(
-                {".ROBLOSECURITY": ROBLOSECURITY},
-                response_url=aiohttp.client.URL("https://roblox.com"),
-            )
     return _session
 
 
@@ -205,42 +199,46 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
     game_name = monitored_games.get(place_id, {}).get("name", f"Roblox Place {place_id}")
 
     try:
-        universe_id = await get_universe_id_from_place(session, place_id)
-        if universe_id is None:
-            return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}
-
-        url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+        # Use multiget-place-details — works for private/17+ games unlike the games API
+        url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
         async with session.get(url) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                games = data.get("data", [])
-                if not games:
-                    # Empty data = game hidden (expired cookie or age-restricted)
-                    # Treat as unknown so we don't falsely mark it offline
-                    print(f"WARNING: [{place_id}] Games API returned empty data (cookie expired or age-restricted). Treating as online.")
-                    return {"name": game_name, "status": "online", "players": 0, "servers": 0}
-                if games:
-                    g = games[0]
-                    name = g.get("name", game_name)
+                if not data:
+                    return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}
 
-                    if not g.get("isPlayable", True):
-                        reason = g.get("reasonProhibited", "Unknown")
-                        print(f"WARNING: [{place_id}] {name} - {reason}")
-                        return {"name": name, "status": "offline", "players": 0, "servers": 0}
+                place = data[0]
+                name = place.get("name", game_name)
+                display_name = GAME_DISPLAY_NAME if GAME_DISPLAY_NAME else name
 
-                    api_players = g.get("playing", 0)
-                    running_servers, live_players = await fetch_roblox_server_count(session, str(universe_id))
-                    players = live_players if live_players > 0 else api_players
+                if not place.get("isPlayable", True):
+                    reason = place.get("reasonProhibited", "Unknown")
+                    print(f"WARNING: [{place_id}] {name} - {reason}")
+                    return {"name": display_name, "status": "offline", "players": 0, "servers": 0}
 
-                    display_name = GAME_DISPLAY_NAME if GAME_DISPLAY_NAME else name
-                    return {
-                        "name": display_name,
-                        "status": "online",
-                        "players": players,
-                        "servers": running_servers,
-                    }
+                # Get player/server count via universe ID
+                universe_id = place.get("universeId")
+                players = 0
+                servers = 0
+                if universe_id:
+                    servers, players = await fetch_roblox_server_count(session, str(universe_id))
+                    if players == 0:
+                        # Fallback to cached universe API player count
+                        uid_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+                        async with session.get(uid_url) as gr:
+                            if gr.status == 200:
+                                gdata = await gr.json()
+                                if gdata.get("data"):
+                                    players = gdata["data"][0].get("playing", 0)
 
-        return {"name": game_name, "status": "offline", "players": 0, "servers": 0}
+                return {
+                    "name": display_name,
+                    "status": "online",
+                    "players": players,
+                    "servers": servers,
+                }
+
+        return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}
 
     except Exception as e:
         print(f"WARNING: Error fetching place {place_id}: {e}")
