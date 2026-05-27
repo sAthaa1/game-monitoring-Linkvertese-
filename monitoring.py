@@ -214,6 +214,11 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
             if resp.status == 200:
                 data = await resp.json()
                 games = data.get("data", [])
+                if not games:
+                    # Empty data = game hidden (expired cookie or age-restricted)
+                    # Treat as unknown so we don't falsely mark it offline
+                    print(f"WARNING: [{place_id}] Games API returned empty data (cookie expired or age-restricted). Treating as online.")
+                    return {"name": game_name, "status": "online", "players": 0, "servers": 0}
                 if games:
                     g = games[0]
                     name = g.get("name", game_name)

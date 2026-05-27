@@ -130,21 +130,26 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                     if resp.status == 200:
                         data = await resp.json()
                         games = data.get("data", [])
-                        if games:
-                            g = games[0]
-                            is_playable = g.get("isPlayable", True)
-                            reason = g.get("reasonProhibited", "")
 
-                            # Treat age-restriction as playable (game is up, just age-gated)
-                            if not is_playable and "Under17" in reason:
-                                print(f"WARNING: [{place_id}] 17+ game detected without valid auth cookie.")
-                                return True, universe_id
+                        if not games:
+                            # Empty = cookie expired or age-restricted, assume playable
+                            print(f"WARNING: [{place_id}] Games API empty (cookie expired?). Assuming playable.")
+                            return True, universe_id
 
-                            if is_playable:
-                                return True, universe_id
+                        g = games[0]
+                        is_playable = g.get("isPlayable", True)
+                        reason = g.get("reasonProhibited", "")
 
-                            print(f"BANNED: Place {place_id} is NOT playable. Reason: {reason}")
-                            return False, universe_id
+                        # Treat age-restriction as playable (game is up, just age-gated)
+                        if not is_playable and "Under17" in reason:
+                            print(f"WARNING: [{place_id}] 17+ game, treating as playable.")
+                            return True, universe_id
+
+                        if is_playable:
+                            return True, universe_id
+
+                        print(f"BANNED: Place {place_id} is NOT playable. Reason: {reason}")
+                        return False, universe_id
             except asyncio.TimeoutError:
                 print(f"WARNING: [{place_id}] Timeout checking Games API")
                 return False, universe_id
