@@ -86,13 +86,9 @@ def remove_from_stock(place_id: str, mem_stock: list[str] | None = None) -> list
 ROBLOSECURITY = os.getenv("ROBLOSECURITY", "")
 
 def _make_roblox_session() -> aiohttp.ClientSession:
-    """Create an aiohttp session with the Roblox auth cookie as a raw header."""
-    headers = {}
-    if ROBLOSECURITY:
-        headers["Cookie"] = f".ROBLOSECURITY={ROBLOSECURITY}"
+    """Create a plain aiohttp session for public Roblox API calls."""
     return aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=PLAYABILITY_CHECK_TIMEOUT),
-        headers=headers,
     )
 
 
@@ -124,27 +120,28 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                 print(f"WARNING: [{place_id}] Cannot resolve Universe ID")
                 return False, None
 
-            # Step 2: Check via place-details API (works for private/17+ games)
-            url = f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={place_id}"
+            # Step 2: Check via public Games API
+            url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
             try:
                 async with session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        if not data:
-                            print(f"WARNING: [{place_id}] Place details empty. Assuming playable.")
+                        games = data.get("data", [])
+
+                        if not games:
+                            # Not in public API — assume playable to avoid false bans
+                            print(f"WARNING: [{place_id}] Games API empty. Assuming playable.")
                             return True, universe_id
 
-                        place = data[0]
-                        is_playable = place.get("isPlayable", True)
-                        reason = place.get("reasonProhibited", "None")
-
-                        if is_playable or reason == "None":
+                        g = games[0]
+                        if g.get("isPlayable", True):
                             return True, universe_id
 
+                        reason = g.get("reasonProhibited", "Unknown")
                         print(f"BANNED: Place {place_id} is NOT playable. Reason: {reason}")
                         return False, universe_id
             except asyncio.TimeoutError:
-                print(f"WARNING: [{place_id}] Timeout checking place details")
+                print(f"WARNING: [{place_id}] Timeout checking Games API")
                 return False, universe_id
 
             return False, universe_id
