@@ -130,7 +130,6 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
 
                         if not games:
                             # Not in public API — assume playable to avoid false bans
-                            print(f"WARNING: [{place_id}] Games API empty. Assuming playable.")
                             return True, universe_id
 
                         g = games[0]
