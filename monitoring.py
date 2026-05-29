@@ -211,7 +211,9 @@ async def fetch_roblox_status(session: aiohttp.ClientSession, place_id: str) -> 
                 games = data.get("data", [])
 
                 if not games:
-                    return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}                g = games[0]
+                    return {"name": game_name, "status": "unknown", "players": 0, "servers": 0}
+
+                g = games[0]
                 name = g.get("name", game_name)
                 display_name = GAME_DISPLAY_NAME if GAME_DISPLAY_NAME else name
 
