@@ -129,8 +129,9 @@ async def is_place_openable(place_id: str) -> tuple[bool, int | None]:
                         games = data.get("data", [])
 
                         if not games:
-                            # Not in public API — assume playable to avoid false bans
-                            return True, universe_id
+                            # Not in public API = private/inactive, skip it
+                            print(f"SKIP: [{place_id}] Private or inactive game, skipping.")
+                            return False, universe_id
 
                         g = games[0]
                         if g.get("isPlayable", True):
@@ -300,6 +301,22 @@ async def run_orchestrator():
 
         current_id = mem_stock[0]
         print(f"\nORCHESTRATOR: Using Place ID {current_id} ({len(mem_stock)} in stock)")
+
+        # Pre-check: skip private/inactive games immediately before posting embed
+        playable, universe_id = await is_place_openable(current_id)
+        if not playable and universe_id is not None:
+            # Confirmed unplayable (not a network error) — skip immediately
+            print(f"ORCHESTRATOR: [{current_id}] Unplayable, removing from stock.")
+            await cleanup_discord_messages()
+            mem_stock = remove_from_stock(current_id, mem_stock)
+            await asyncio.sleep(2)
+            continue
+        elif not playable and universe_id is None:
+            # Can't resolve universe ID — network issue, try next ID
+            print(f"ORCHESTRATOR: [{current_id}] Cannot resolve, skipping.")
+            mem_stock = remove_from_stock(current_id, mem_stock)
+            await asyncio.sleep(5)
+            continue
 
         # Write active place ID so the monitoring bot picks it up
         ok = set_active_place_id(current_id)
