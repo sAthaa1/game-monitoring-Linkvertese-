@@ -269,11 +269,7 @@ def create_status_embed(game_id: str, data: dict) -> discord.Embed:
     if status == "banned":
         embed.description = "🚫 **PLACE BANNED / MODERATED**\nThis place is no longer accessible."
     else:
-        embed.add_field(
-            name="⚠️ Reminder",
-            value="If you can't join the game, you need to create a new Roblox account using a VPN.",
-            inline=False
-        )
+        embed.add_field(name="Current Playing", value=f"{players}", inline=False)
 
         if status == "online" and game_id in uptime_start:
             embed.add_field(name="Uptime", value=format_uptime(uptime_start[game_id]), inline=False)
