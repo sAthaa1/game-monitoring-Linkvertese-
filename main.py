@@ -23,6 +23,11 @@ import sys
 import os
 import json
 import aiohttp
+
+# Fix SSL certificate verification on Windows Server / RDP environments
+import certifi
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 from dotenv import load_dotenv
 
 load_dotenv()

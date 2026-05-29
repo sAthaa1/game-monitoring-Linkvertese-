@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 import sys
 import base64
 from dotenv import load_dotenv
+import certifi
+
+# Fix SSL certificate verification on Windows Server / RDP environments
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
 load_dotenv()
 
