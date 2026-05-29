@@ -51,6 +51,9 @@ banned_games: set[str] = set()
 # Cache universe IDs so we don't re-fetch them every loop tick
 _universe_id_cache: dict[str, int] = {}
 
+# Event set by monitor_loop when a game goes offline — orchestrator listens to this
+game_offline_event: asyncio.Event = asyncio.Event()
+
 COLORS = {
     "online": 0x000000,
     "offline": 0x000000,
@@ -434,6 +437,10 @@ async def monitor_loop():
         else:
             if game_id in uptime_start:
                 uptime_start.pop(game_id, None)
+            # Signal orchestrator to switch immediately
+            if curr_status == "offline":
+                print(f"OFFLINE: [{game_id}] Game is offline/banned. Signalling orchestrator.")
+                game_offline_event.set()
 
         monitored_games[game_id].update(data)
 

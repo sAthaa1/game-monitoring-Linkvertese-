@@ -344,6 +344,15 @@ async def run_orchestrator():
                 mem_stock = disk_stock
                 break
 
+            # Check if monitoring bot already detected the game as offline
+            if monitoring.game_offline_event.is_set():
+                monitoring.game_offline_event.clear()
+                print(f"ORCHESTRATOR: [{current_id}] Offline signal received. Switching immediately.")
+                await cleanup_discord_messages()
+                mem_stock = remove_from_stock(current_id, mem_stock)
+                await asyncio.sleep(2)
+                break
+
             playable, universe_id = await is_place_openable(current_id)
 
             if playable:
