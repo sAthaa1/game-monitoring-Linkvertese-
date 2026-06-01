@@ -136,13 +136,8 @@ async def send_message(session: aiohttp.ClientSession, channel_id: int, content:
             elif r.status == 429:
                 data = await r.json()
                 wait = data.get("retry_after", 2)
-                print(f"RATE LIMITED: waiting {wait}s for channel {channel_id}")
-                await asyncio.sleep(wait)
-                # retry once
-                async with session.post(url, json={"content": content}, headers=make_headers()) as r2:
-                    if r2.status == 200:
-                        data2 = await r2.json()
-                        return int(data2["id"])
+                print(f"RATE LIMITED: channel {channel_id} — skipping this round (retry_after: {wait:.0f}s)")
+                return None
             else:
                 print(f"FAILED: {r.status} on channel {channel_id}: {await r.text()}")
     except Exception as e:
@@ -173,7 +168,7 @@ async def share_once(session: aiohttp.ClientSession):
         if msg_id:
             last_message_ids[channel_id] = msg_id
 
-        await asyncio.sleep(1)  # small delay between channels
+        await asyncio.sleep(3)  # delay between channels to avoid rate limits
 
 
 async def main():
